@@ -30,6 +30,7 @@
               pkgs.cppcheck
               pkgs.bear
               pkgs.doctest
+              pkgs.yyjson
             ];
 
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath ([
