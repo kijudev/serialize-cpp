@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <print>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
@@ -40,16 +41,24 @@ template <typename ArchiveT, typename ValueT>
 concept HasGlobalSerialize =
     requires(ArchiveT& archive, ValueT& value) { serialize(archive, value); };
 
+template <typename ArchiveT, typename ValueT>
+concept IsSerializable = HasGlobalSerialize<ArchiveT, ValueT>;
+
 class DebugWriter {
+    U32 m_depth { 0 };
+
    public:
     template <typename ValueT>
     void property(std::string_view name, ValueT& value) {
         if constexpr (HasMemberSerialize<DebugWriter, ValueT>) {
+            std::println("{}{}:", std::string(m_depth, '\t'), name);
+            ++m_depth;
             value.serialize(*this);
+            --m_depth;
         } else if constexpr (std::is_same_v<ValueT, U32>) {
-            std::println("{} -> {}", name, value);
+            std::println("{}{}: {}", std::string(m_depth, '\t'), name, value);
         } else if constexpr (std::is_same_v<ValueT, F32>) {
-            std::println("{} -> {}", name, value);
+            std::println("{}{}: {}", std::string(m_depth, '\t'), name, value);
         }
     }
 };
