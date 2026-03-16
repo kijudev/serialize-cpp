@@ -31,6 +31,7 @@
               pkgs.bear
               pkgs.doctest
               pkgs.yyjson
+              pkgs.pkg-config
             ];
 
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath ([

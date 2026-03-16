@@ -1,6 +1,10 @@
-CXX      := clang++
-CXXOPT   := -O1 -g
-CXXFLAGS := -std=c++23 -Wall -Wextra -Iinclude
+CXX         := clang++
+CXXOPT      := -O1 -g
+PKG_CONFIG  := pkg-config
+YYJSON_CFLAGS := $(shell $(PKG_CONFIG) --cflags yyjson)
+YYJSON_LIBS   := $(shell $(PKG_CONFIG) --libs yyjson)
+CXXFLAGS    := -std=c++23 -Wall -Wextra -Iinclude $(YYJSON_CFLAGS)
+LDFLAGS     := $(YYJSON_LIBS)
 
 EXAMPLES      := $(wildcard examples/*/main.cpp)
 EXAMPLES_BIN  := $(patsubst examples/%/main.cpp,build/%,$(EXAMPLES))
@@ -18,11 +22,11 @@ tests: $(TESTS_BIN)
 
 build/%: examples/%/main.cpp
 	mkdir -p build
-	$(CXX) $(CXXFLAGS) $(CXXOPT) $< -o $@
+	$(CXX) $(CXXFLAGS) $(CXXOPT) $< -o $@ $(LDFLAGS)
 
 build/tests/%: tests/%.cpp
 	mkdir -p build/tests
-	$(CXX) $(CXXFLAGS) $(CXXOPT) $< -o $@
+	$(CXX) $(CXXFLAGS) $(CXXOPT) $< -o $@ $(LDFLAGS)
 
 compile-commands:
 	bear -- $(MAKE) examples tests
