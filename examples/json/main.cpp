@@ -72,7 +72,7 @@ int main() {
     };
 
     state.serialize(json_writer);
-    std::string json_string = json_writer.to_string();
+    std::string json_string = json_writer.format();
 
     std::println("{}", json_string);
 

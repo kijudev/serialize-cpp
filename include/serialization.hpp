@@ -34,8 +34,6 @@ using F32 = float;
 using F64 = double;
 
 using Byte = std::byte;
-using Ch   = char;
-using Bool = bool;
 
 namespace ser {
 
@@ -43,12 +41,16 @@ namespace ser {
 // Concepts, Interfaces, Helpers
 // =========================================================================================
 
+template <typename T>
+concept IsIterableT = std::ranges::range<T> && !std::is_same_v<T, std::string> &&
+                      !std::is_same_v<T, std::string_view>;
+
 enum class ArchiveMode { Read, Write };
 
 template <typename ArchiveT>
 concept IsArchiveT =
     requires(ArchiveT archive, U32& value) {
-        { ArchiveT::mode } -> std::same_as<const ArchiveMode&>;
+        { ArchiveT::mode } -> std::convertible_to<const ArchiveMode&>;
         { archive.property("property_name", value) } -> std::same_as<void>;
     } && !std::is_copy_constructible_v<ArchiveT>  // <-
     && !std::is_copy_assignable_v<ArchiveT>       // <-
@@ -99,7 +101,7 @@ class DebugStdoutWriter {
    public:
     struct Options {
         U32 tab_width { 4 };
-        Bool print_types : 1 { true };
+        bool print_types : 1 { true };
     };
 
     static constexpr ArchiveMode mode = ArchiveMode::Write;
@@ -176,7 +178,7 @@ class DebugStdoutWriter {
             std::printf("%s%s%.*s: %g\n", indent.c_str(), type_prefix.c_str(),
                         static_cast<int>(name.size()), name.data(),
                         static_cast<double>(value));
-        } else if constexpr (std::is_same_v<ValueT, Bool>) {
+        } else if constexpr (std::is_same_v<ValueT, bool>) {
             std::printf("%s%s%.*s: %s\n", indent.c_str(), type_prefix.c_str(),
                         static_cast<int>(name.size()), name.data(),
                         value ? "true" : "false");
@@ -191,9 +193,10 @@ class DebugStdoutWriter {
             std::printf("%s%s%.*s: 0x%02X\n", indent.c_str(), type_prefix.c_str(),
                         static_cast<int>(name.size()), name.data(),
                         std::to_integer<U32>(value));
+        } else {
+            // TODO: Implement better static asserts; macros.
+            static_assert(false, "DebugStdoutWriter::ERROR");
         }
-
-        // NOTE: Do nothing if the type is insupported; skip serialization.
     }
 
    private:
@@ -227,8 +230,8 @@ class DebugStdoutWriter {
 class JsonWriter {
    public:
     struct Options {
-        Bool include_type : 1 { true };
-        Bool pretty       : 1 { true };
+        bool include_type : 1 { true };
+        bool pretty       : 1 { true };
     };
 
     enum class State : U8 { Init, Serialize, Done, Error };
@@ -274,8 +277,8 @@ class JsonWriter {
         const yyjson_write_flag flags =
             m_options.pretty ? YYJSON_WRITE_PRETTY : YYJSON_WRITE_NOFLAG;
 
-        USize len = 0;
-        Ch* data  = yyjson_mut_write(m_doc, flags, &len);
+        USize len  = 0;
+        char* data = yyjson_mut_write(m_doc, flags, &len);
 
         if (!data) {
             m_state = State::Error;
@@ -359,37 +362,30 @@ class JsonWriter {
             }
 
             m_stack.pop_back();
-        } else if constexpr (std::is_same_v<ValueT, U8>) {
-            impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, U16>) {
-            impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, U32>) {
-            impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, U64>) {
-            impl_add_value(name, yyjson_mut_uint(m_doc, value));
-        } else if constexpr (std::is_same_v<ValueT, S8>) {
-            impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, S16>) {
-            impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, S32>) {
-            impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, S64>) {
-            impl_add_value(name, yyjson_mut_sint(m_doc, value));
-        } else if constexpr (std::is_same_v<ValueT, USize>) {
-            impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, F32>) {
-            impl_add_value(name, yyjson_mut_float(m_doc, value));
-        } else if constexpr (std::is_same_v<ValueT, F64>) {
-            impl_add_value(name, yyjson_mut_double(m_doc, value));
-        } else if constexpr (std::is_same_v<ValueT, Bool>) {
-            impl_add_value(name, yyjson_mut_bool(m_doc, value));
-        } else if constexpr (std::is_same_v<ValueT, std::string>) {
+        } else if constexpr (IsIterableT<ValueT>) {
+            yyjson_mut_val* arr = yyjson_mut_arr(m_doc);
+            impl_add_value(name, arr);
+            m_stack.push_back(arr);
+
+            for (auto& item : value) {
+                property("", item);
+            }
+
+            m_stack.pop_back();
+        } else if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
+            } else {
+                impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
+            }
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            impl_add_value(name, yyjson_mut_double(m_doc, static_cast<F64>(value)));
+        } else if constexpr (std::is_same_v<ValueT, std::string> ||
+                             std::is_same_v<ValueT, std::string_view>) {
             impl_add_value(name, yyjson_mut_strncpy(m_doc, value.data(), value.size()));
-        } else if constexpr (std::is_same_v<ValueT, std::string_view>) {
-            impl_add_value(name, yyjson_mut_strncpy(m_doc, value.data(), value.size()));
-        } else if constexpr (std::is_same_v<ValueT, Byte>) {
-            impl_add_value(
-                name, yyjson_mut_uint(m_doc, static_cast<U64>(std::to_integer<U8>(value))));
+        } else {
+            // TODO: Better assertions, macros.
+            static_assert(false, "JsonWriter::ERROR");
         }
     }
 
@@ -407,19 +403,22 @@ class JsonWriter {
             return;
         }
 
-        yyjson_mut_val* obj = impl_curr_obj();
-        if (!obj) {
+        yyjson_mut_val* parent = impl_curr_obj();
+        if (!parent) {
             m_state = State::Error;
             return;
         }
 
-        yyjson_mut_val* key = yyjson_mut_strncpy(m_doc, name.data(), name.size());
-        if (!key) {
-            m_state = State::Error;
-            return;
+        if (yyjson_mut_is_arr(parent)) {
+            yyjson_mut_arr_append(parent, val);
+        } else {
+            yyjson_mut_val* key = yyjson_mut_strncpy(m_doc, name.data(), name.size());
+            if (!key) {
+                m_state = State::Error;
+                return;
+            }
+            yyjson_mut_obj_add(parent, key, val);
         }
-
-        yyjson_mut_obj_add(obj, key, val);
     }
 
     yyjson_mut_val* impl_curr_obj() { return m_stack.empty() ? m_root : m_stack.back(); }
@@ -439,20 +438,5 @@ class JsonWriter {
 // =========================================================================================
 // Generic `serialize_global` implementations for common std containers.
 // =========================================================================================
-
-template <IsArchiveT ArchiveT, typename ValueT>
-void serialize_global(ArchiveT& ar, std::vector<ValueT>& vec) {
-    USize size = vec.size();
-
-    ar.property("size", size);
-
-    if constexpr (ArchiveT::mode == ArchiveMode::Read) {
-        vec.resize(size);
-    }
-
-    for (USize i = 0; i < size; ++i) {
-        ar.property("item." + std::to_string(i), vec[i]);
-    }
-}
 
 }  // namespace ser
