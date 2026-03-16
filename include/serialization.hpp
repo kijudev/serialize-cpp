@@ -3,12 +3,12 @@
 #include <yyjson.h>
 
 #include <cassert>
-#include <cinttypes>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <print>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -65,6 +65,7 @@ template <typename ArchiveT, typename ValueT>
 concept HasGlobalSerializeT =
     requires(ArchiveT& archive, ValueT& value) { serialize_global(archive, value); };
 
+// TODO: this should propably be removed
 template <typename ArchiveT, typename ValueT>
 concept IsSerializableT =
     HasMemberSerializeT<ArchiveT, ValueT> || HasGlobalSerializeT<ArchiveT, ValueT>;
@@ -125,8 +126,8 @@ class DebugStdoutWriter {
         const std::string type_prefix = impl_type_prefix(compt_type_name);
 
         if constexpr (IsSerializableT<DebugStdoutWriter, ValueT>) {
-            std::printf("%s%s%.*s:\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data());
+            std::println("{}{} {}:", impl_indent(), impl_type_prefix(compt_type_name),
+                         name);
             ++m_depth;
 
             if constexpr (HasMemberSerializeT<DebugStdoutWriter, ValueT>) {
@@ -136,63 +137,42 @@ class DebugStdoutWriter {
             }
 
             --m_depth;
-        } else if constexpr (std::is_same_v<ValueT, U8>) {
-            std::printf("%s%s%.*s: %" PRIu8 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(), static_cast<U8>(value));
-        } else if constexpr (std::is_same_v<ValueT, U16>) {
-            std::printf("%s%s%.*s: %" PRIu16 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<U16>(value));
-        } else if constexpr (std::is_same_v<ValueT, U32>) {
-            std::printf("%s%s%.*s: %" PRIu32 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<U32>(value));
-        } else if constexpr (std::is_same_v<ValueT, U64>) {
-            std::printf("%s%s%.*s: %" PRIu64 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<U64>(value));
-        } else if constexpr (std::is_same_v<ValueT, S8>) {
-            std::printf("%s%s%.*s: %" PRId8 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(), static_cast<S8>(value));
-        } else if constexpr (std::is_same_v<ValueT, S16>) {
-            std::printf("%s%s%.*s: %" PRId16 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<S16>(value));
-        } else if constexpr (std::is_same_v<ValueT, S32>) {
-            std::printf("%s%s%.*s: %" PRId32 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<S32>(value));
-        } else if constexpr (std::is_same_v<ValueT, S64>) {
-            std::printf("%s%s%.*s: %" PRId64 "\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<S64>(value));
-        } else if constexpr (std::is_same_v<ValueT, USize>) {
-            std::printf("%s%s%.*s: %zu\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<USize>(value));
-        } else if constexpr (std::is_same_v<ValueT, F32>) {
-            std::printf("%s%s%.*s: %g\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<double>(value));
-        } else if constexpr (std::is_same_v<ValueT, F64>) {
-            std::printf("%s%s%.*s: %g\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<double>(value));
-        } else if constexpr (std::is_same_v<ValueT, bool>) {
-            std::printf("%s%s%.*s: %s\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        value ? "true" : "false");
-        } else if constexpr (std::is_same_v<ValueT, std::string>) {
-            std::printf("%s%s%.*s: %s\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(), value.c_str());
-        } else if constexpr (std::is_same_v<ValueT, std::string_view>) {
-            std::printf("%s%s%.*s: %.*s\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        static_cast<int>(value.size()), value.data());
-        } else if constexpr (std::is_same_v<ValueT, Byte>) {
-            std::printf("%s%s%.*s: 0x%02X\n", indent.c_str(), type_prefix.c_str(),
-                        static_cast<int>(name.size()), name.data(),
-                        std::to_integer<U32>(value));
+        } else if constexpr (IsIterableT<ValueT>) {
+            std::println("{}{} {}:", impl_indent(), impl_type_prefix(compt_type_name),
+                         name);
+
+            ++m_depth;
+
+            USize idx = 0;
+
+            for (auto& item : value) {
+                property("[" + std::to_string(idx) + "]", item);
+                ++idx;
+            }
+
+            --m_depth;
+        }
+
+        // TODO: This whole block needs to be optimized
+        // std::println and std::format can have a negative impact on compilation times
+        // And I have enought bloat in this project already.
+        else if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                std::println("{}{} {}: {}", impl_indent(),
+                             impl_type_prefix(compt_type_name), name,
+                             static_cast<S64>(value));
+            } else {
+                std::println("{}{} {}: {}", impl_indent(),
+                             impl_type_prefix(compt_type_name), name,
+                             static_cast<U64>(value));
+            }
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            std::println("{}{} {}: {}", impl_indent(), impl_type_prefix(compt_type_name),
+                         name, static_cast<F64>(value));
+        } else if constexpr (std::is_same_v<ValueT, std::string> ||
+                             std::is_same_v<ValueT, std::string_view>) {
+            std::println("{}{} {}:  {}", impl_indent(), impl_type_prefix(compt_type_name),
+                         name, value);
         } else {
             // TODO: Implement better static asserts; macros.
             static_assert(false, "DebugStdoutWriter::ERROR");
@@ -214,7 +194,7 @@ class DebugStdoutWriter {
         prefix.reserve(type_name.size() + 3);
         prefix.push_back('[');
         prefix.append(type_name);
-        prefix.append("] ");
+        prefix.push_back(']');
 
         return prefix;
     }
@@ -431,6 +411,226 @@ class JsonWriter {
 
     // State
     std::string m_output {};
+    State m_state { State::Init };
+    const Options m_options;
+};
+
+class JsonReader {
+   public:
+    // NOTE: Not used for now
+    struct Options {};
+
+    enum class State : U8 { Init, Serialize, Done, Error };
+
+    static constexpr ArchiveMode mode = ArchiveMode::Read;
+
+    JsonReader(std::string_view json_string) : JsonReader(json_string, Options {}) {}
+    JsonReader(std::string_view json_string, Options options) : m_options(options) {
+        m_state = State::Init;
+
+        // Parse the json string into an immutable document.
+        yyjson_read_flag flags = YYJSON_READ_NOFLAG;
+        yyjson_read_err err;
+        m_doc = yyjson_read_opts(const_cast<char*>(json_string.data()), json_string.size(),
+                                 flags, nullptr, &err);
+
+        if (!m_doc) {
+            m_state = State::Error;
+            return;
+        }
+
+        m_root = yyjson_doc_get_root(m_doc);
+        if (!m_root) {
+            m_state = State::Error;
+            return;
+        }
+
+        m_stack.push_back(m_root);
+        m_arr_indices.push_back(0);
+        m_state = State::Init;
+    }
+
+    JsonReader(const JsonReader&)            = delete;
+    JsonReader& operator=(const JsonReader&) = delete;
+    JsonReader(JsonReader&&)                 = delete;
+    JsonReader& operator=(JsonReader&&)      = delete;
+
+    ~JsonReader() { impl_cleanup(); }
+
+   public:
+    void reset(std::string_view json_data) {
+        impl_cleanup();
+        m_state = State::Init;
+
+        m_doc = yyjson_read_opts(const_cast<char*>(json_data.data()), json_data.size(),
+                                 YYJSON_READ_NOFLAG, nullptr, nullptr);
+
+        if (!m_doc) {
+            m_state = State::Error;
+            return;
+        }
+
+        m_root = yyjson_doc_get_root(m_doc);
+        if (!m_root) {
+            m_state = State::Error;
+            return;
+        }
+
+        m_stack.push_back(m_root);
+        m_arr_indices.push_back(0);
+    }
+
+    State state() const { return m_state; }
+
+    template <typename ValueT>
+    void property(std::string_view name, ValueT& value) {
+        if (m_state == State::Error || m_state == State::Done) {
+            return;
+        }
+
+        if (!m_doc || !m_root) {
+            m_state = State::Error;
+            return;
+        }
+
+        if (m_state == State::Init) {
+            m_state = State::Serialize;
+        }
+
+        yyjson_val* val = impl_get_value(name);
+
+        // SAFETY: If val is NULL we return; the deafult C++ constructor/initializer is
+        // called.
+        if (!val) {
+            return;
+        }
+
+        if constexpr (IsSerializableT<JsonReader, ValueT>) {
+            if (!yyjson_is_obj(val)) {
+                m_state = State::Error;
+                return;
+            }
+
+            m_stack.push_back(val);
+            m_arr_indices.push_back(0);
+
+            if constexpr (HasMemberSerializeT<JsonReader, ValueT>) {
+                value.serialize(*this);
+            } else {
+                serialize_global(*this, value);
+            }
+
+            m_stack.pop_back();
+            m_arr_indices.pop_back();
+
+        } else if constexpr (IsIterableT<ValueT>) {
+            if (!yyjson_is_arr(val)) {
+                m_state = State::Error;
+                return;
+            }
+
+            m_stack.push_back(val);
+            m_arr_indices.push_back(0);
+
+            USize size = yyjson_arr_size(val);
+
+            // Allocate suffiecent memory before reading.
+            if constexpr (requires { value.resize(size); }) {
+                value.resize(size);
+            }
+
+            for (auto& item : value) {
+                // TODO: Add some nice idiom, constepr value for name-less properties.
+                property("", item);
+            }
+
+            m_stack.pop_back();
+            m_arr_indices.pop_back();
+
+        }
+
+        // NOTE: Bool is separated from standard integral types because yyjson treats
+        // bool differently than C++.
+        else if constexpr (std::is_same_v<ValueT, bool>) {
+            if (yyjson_is_bool(val)) {
+                value = yyjson_get_bool(val);
+            }
+        } else if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                if (yyjson_is_int(val)) {
+                    value = static_cast<ValueT>(yyjson_get_sint(val));
+                }
+            } else {
+                if (yyjson_is_uint(val)) {
+                    value = static_cast<ValueT>(yyjson_get_uint(val));
+                } else if (yyjson_is_int(val)) {
+                    value = static_cast<ValueT>(yyjson_get_sint(val));
+                }
+            }
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            if (yyjson_is_num(val)) {
+                value = static_cast<ValueT>(yyjson_get_num(val));
+            }
+        } else if constexpr (std::is_same_v<ValueT, std::string>) {
+            if (yyjson_is_str(val)) {
+                value.assign(yyjson_get_str(val), yyjson_get_len(val));
+            }
+        } else if constexpr (std::is_same_v<ValueT, std::string_view>) {
+            // WARNING: std::string_view will dangle if the JsonReader is destroyed.
+            if (yyjson_is_str(val)) {
+                value = std::string_view(yyjson_get_str(val), yyjson_get_len(val));
+            }
+        } else {
+            static_assert(false, "JsonReader::ERROR - Unsupported type");
+        }
+    }
+
+   private:
+    void impl_cleanup() {
+        if (m_doc) {
+            yyjson_doc_free(m_doc);
+            m_doc = nullptr;
+        }
+
+        m_root = nullptr;
+        m_stack.clear();
+        m_arr_indices.clear();
+    }
+
+    yyjson_val* impl_get_value(std::string_view name) {
+        if (m_stack.empty()) return nullptr;
+
+        yyjson_val* parent = m_stack.back();
+        if (!parent) return nullptr;
+
+        if (yyjson_is_arr(parent)) {
+            // We are inside an array, ignore the name-less name, get by index
+            USize& idx      = m_arr_indices.back();
+            yyjson_val* val = yyjson_arr_get(parent, idx);
+            ++idx;
+
+            return val;
+        } else if (yyjson_is_obj(parent)) {
+            // We are inside an object, get by name; key
+            return yyjson_obj_getn(parent, name.data(), name.size());
+        }
+
+        return nullptr;
+    }
+
+   private:
+    // YYJSON
+    yyjson_doc* m_doc { nullptr };
+    yyjson_val* m_root { nullptr };
+
+    // Stacks
+    // `m_stack` is for the nodes, like in JsonWriter.
+    std::vector<yyjson_val*> m_stack {};
+    // `m_arr_indices` is to keep track of the array elements. It is much more managable
+    // this way.
+    std::vector<USize> m_arr_indices {};
+
+    // State
     State m_state { State::Init };
     const Options m_options;
 };

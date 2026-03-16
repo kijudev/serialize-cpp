@@ -54,7 +54,7 @@ struct State {
 };
 
 int main() {
-    ser::DebugStdoutWriter debug_stdout_writer;
+    ser::DebugStdoutWriter debug_stdout_writer({ .tab_width = 2, .print_types = false });
 
     Position position_a { .x = 1.0f, .y = -1.0f, .z = 42.42f };
     Rotation rotation_a { .yawn = 1.0f, .pitch = 0.5f, .roll = 0.69f };
@@ -64,13 +64,13 @@ int main() {
     Rotation rotation_b { .yawn = 3.3f, .pitch = 1.5f, .roll = 42.69f };
     Transform transform_b { .position = position_b, .rotation = rotation_b };
 
-    // State state {
-    //     .version = 0,
-    //     .name    = "Game of Life",
-    //     .transforms { transform_a, transform_b },
-    // };
+    State state {
+        .version = 0,
+        .name    = "Game of Life",
+        .transforms { transform_a, transform_b },
+    };
 
-    // state.serialize(debug_stdout_writer);
+    state.serialize(debug_stdout_writer);
 
     return 0;
 }

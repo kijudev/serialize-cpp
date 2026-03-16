@@ -55,7 +55,7 @@ struct State {
 };
 
 int main() {
-    ser::JsonWriter json_writer;
+    ser::JsonWriter json_writer({ .include_type = false });
 
     Position position_a { .x = 1.0f, .y = -1.0f, .z = 42.42f };
     Rotation rotation_a { .yawn = 1.0f, .pitch = 0.5f, .roll = 0.69f };
@@ -75,6 +75,13 @@ int main() {
     std::string json_string = json_writer.format();
 
     std::println("{}", json_string);
+    std::println("-------------------------------");
+
+    ser::JsonReader json_reader(json_string);
+    State read_state;
+    read_state.serialize(json_reader);
+
+    std::println("transforms[0].position.x: {}", read_state.transforms[0].position.x);
 
     return 0;
 }
