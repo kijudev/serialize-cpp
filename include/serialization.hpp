@@ -41,10 +41,6 @@ namespace ser {
 // Concepts, Interfaces, Helpers
 // =========================================================================================
 
-template <typename T>
-concept IsIterableT = std::ranges::range<T> && !std::is_same_v<T, std::string> &&
-                      !std::is_same_v<T, std::string_view>;
-
 enum class ArchiveMode { Read, Write };
 
 template <typename ArchiveT>
@@ -70,6 +66,12 @@ template <typename ArchiveT, typename ValueT>
 concept IsSerializableT =
     HasMemberSerializeT<ArchiveT, ValueT> || HasGlobalSerializeT<ArchiveT, ValueT>;
 
+namespace impl {
+
+template <typename T>
+concept IsIterableT = std::ranges::range<T> && !std::is_same_v<T, std::string> &&
+                      !std::is_same_v<T, std::string_view>;
+
 // WARNING:
 // This one was written by a Clanker. It was not tested on windows with MSVC.
 template <typename T>
@@ -93,6 +95,7 @@ consteval std::string_view compt_get_type_name() {
     return "@unknown";
 #endif
 }
+}  // namespace impl
 
 // =========================================================================================
 // IMPLEMENTATION: DebugStdout
@@ -120,26 +123,29 @@ class DebugStdoutWriter {
    public:
     template <typename ValueT>
     void property(std::string_view name, ValueT& value) {
-        constexpr std::string_view compt_type_name = compt_get_type_name<ValueT>();
+        constexpr std::string_view compt_type_name = impl::compt_get_type_name<ValueT>();
 
         const std::string indent      = impl_indent();
         const std::string type_prefix = impl_type_prefix(compt_type_name);
 
-        if constexpr (IsSerializableT<DebugStdoutWriter, ValueT>) {
-            std::println("{}{} {}:", impl_indent(), impl_type_prefix(compt_type_name),
-                         name);
-            ++m_depth;
-
-            if constexpr (HasMemberSerializeT<DebugStdoutWriter, ValueT>) {
-                value.serialize(*this);
+        // TODO: This whole block needs to be optimized
+        // std::println and std::format can have a negative impact on compilation times
+        // And I have enought bloat in this project already.
+        if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                std::println("{}{} {}: {}", indent, type_prefix, name,
+                             static_cast<S64>(value));
             } else {
-                serialize_global(*this, value);
+                std::println("{}{} {}: {}", indent, type_prefix, name,
+                             static_cast<U64>(value));
             }
-
-            --m_depth;
-        } else if constexpr (IsIterableT<ValueT>) {
-            std::println("{}{} {}:", impl_indent(), impl_type_prefix(compt_type_name),
-                         name);
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            std::println("{}{} {}: {}", indent, type_prefix, name, static_cast<F64>(value));
+        } else if constexpr (std::is_same_v<ValueT, std::string> ||
+                             std::is_same_v<ValueT, std::string_view>) {
+            std::println("{}{} {}:  {}", indent, type_prefix, name, value);
+        } else if constexpr (impl::IsIterableT<ValueT>) {
+            std::println("{}{} {}:", indent, type_prefix, name);
 
             ++m_depth;
 
@@ -151,28 +157,17 @@ class DebugStdoutWriter {
             }
 
             --m_depth;
-        }
+        } else if constexpr (IsSerializableT<DebugStdoutWriter, ValueT>) {
+            std::println("{}{} {}:", indent, type_prefix, name);
+            ++m_depth;
 
-        // TODO: This whole block needs to be optimized
-        // std::println and std::format can have a negative impact on compilation times
-        // And I have enought bloat in this project already.
-        else if constexpr (std::is_integral_v<ValueT>) {
-            if constexpr (std::is_signed_v<ValueT>) {
-                std::println("{}{} {}: {}", impl_indent(),
-                             impl_type_prefix(compt_type_name), name,
-                             static_cast<S64>(value));
+            if constexpr (HasMemberSerializeT<DebugStdoutWriter, ValueT>) {
+                value.serialize(*this);
             } else {
-                std::println("{}{} {}: {}", impl_indent(),
-                             impl_type_prefix(compt_type_name), name,
-                             static_cast<U64>(value));
+                serialize_global(*this, value);
             }
-        } else if constexpr (std::is_floating_point_v<ValueT>) {
-            std::println("{}{} {}: {}", impl_indent(), impl_type_prefix(compt_type_name),
-                         name, static_cast<F64>(value));
-        } else if constexpr (std::is_same_v<ValueT, std::string> ||
-                             std::is_same_v<ValueT, std::string_view>) {
-            std::println("{}{} {}:  {}", impl_indent(), impl_type_prefix(compt_type_name),
-                         name, value);
+
+            --m_depth;
         } else {
             // TODO: Implement better static asserts; macros.
             static_assert(false, "DebugStdoutWriter::ERROR");
@@ -265,7 +260,6 @@ class JsonWriter {
             return m_output;
         }
 
-        // TODO: Optimize the copy of the whole buffer.
         m_output.assign(data, len);
         std::free(data);
 
@@ -304,6 +298,7 @@ class JsonWriter {
 
     template <typename ValueT>
     void property(std::string_view name, ValueT& value) {
+        // SAFETY: If writer is in an incorrect state return.
         if (m_state == State::Error || m_state == State::Done) {
             return;
         }
@@ -317,7 +312,33 @@ class JsonWriter {
             m_state = State::Serialize;
         }
 
-        if constexpr (IsSerializableT<JsonWriter, ValueT>) {
+        // ==== (1) Primitive ====
+        if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
+            } else {
+                impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
+            }
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            impl_add_value(name, yyjson_mut_double(m_doc, static_cast<F64>(value)));
+        } else if constexpr (std::is_same_v<ValueT, std::string> ||
+                             std::is_same_v<ValueT, std::string_view>) {
+            impl_add_value(name, yyjson_mut_strncpy(m_doc, value.data(), value.size()));
+        }
+        // ==== (2) Iterable ====
+        else if constexpr (impl::IsIterableT<ValueT>) {
+            yyjson_mut_val* arr = yyjson_mut_arr(m_doc);
+            impl_add_value(name, arr);
+            m_stack.push_back(arr);
+
+            for (auto& item : value) {
+                property("", item);
+            }
+
+            m_stack.pop_back();
+        }
+        // ==== (3) Serializable ====
+        else if constexpr (IsSerializableT<JsonWriter, ValueT>) {
             yyjson_mut_val* obj = yyjson_mut_obj(m_doc);
             if (!obj) {
                 m_state = State::Error;
@@ -327,7 +348,8 @@ class JsonWriter {
             impl_add_value(name, obj);
             m_stack.push_back(obj);
 
-            constexpr std::string_view compt_type_name = compt_get_type_name<ValueT>();
+            constexpr std::string_view compt_type_name =
+                impl::compt_get_type_name<ValueT>();
 
             if (m_options.include_type) {
                 impl_add_value("@typename",
@@ -342,29 +364,9 @@ class JsonWriter {
             }
 
             m_stack.pop_back();
-        } else if constexpr (IsIterableT<ValueT>) {
-            yyjson_mut_val* arr = yyjson_mut_arr(m_doc);
-            impl_add_value(name, arr);
-            m_stack.push_back(arr);
-
-            for (auto& item : value) {
-                property("", item);
-            }
-
-            m_stack.pop_back();
-        } else if constexpr (std::is_integral_v<ValueT>) {
-            if constexpr (std::is_signed_v<ValueT>) {
-                impl_add_value(name, yyjson_mut_sint(m_doc, static_cast<S64>(value)));
-            } else {
-                impl_add_value(name, yyjson_mut_uint(m_doc, static_cast<U64>(value)));
-            }
-        } else if constexpr (std::is_floating_point_v<ValueT>) {
-            impl_add_value(name, yyjson_mut_double(m_doc, static_cast<F64>(value)));
-        } else if constexpr (std::is_same_v<ValueT, std::string> ||
-                             std::is_same_v<ValueT, std::string_view>) {
-            impl_add_value(name, yyjson_mut_strncpy(m_doc, value.data(), value.size()));
-        } else {
-            // TODO: Better assertions, macros.
+        }
+        // ==== (4) Panic ====
+        else {
             static_assert(false, "JsonWriter::ERROR");
         }
     }
@@ -404,12 +406,14 @@ class JsonWriter {
     yyjson_mut_val* impl_curr_obj() { return m_stack.empty() ? m_root : m_stack.back(); }
 
    private:
-    // YYJSON
+    // ==== Json ====
     yyjson_mut_doc* m_doc { nullptr };
     yyjson_mut_val* m_root { nullptr };
+
+    // ==== Stack ====
     std::vector<yyjson_mut_val*> m_stack {};
 
-    // State
+    // ==== State ===
     std::string m_output {};
     State m_state { State::Init };
     const Options m_options;
@@ -417,7 +421,7 @@ class JsonWriter {
 
 class JsonReader {
    public:
-    // NOTE: Not used for now
+    // NOTE: For future use.
     struct Options {};
 
     enum class State : U8 { Init, Serialize, Done, Error };
@@ -426,9 +430,10 @@ class JsonReader {
 
     JsonReader(std::string_view json_string) : JsonReader(json_string, Options {}) {}
     JsonReader(std::string_view json_string, Options options) : m_options(options) {
+        (void)m_options;
+
         m_state = State::Init;
 
-        // Parse the json string into an immutable document.
         yyjson_read_flag flags = YYJSON_READ_NOFLAG;
         yyjson_read_err err;
         m_doc = yyjson_read_opts(const_cast<char*>(json_string.data()), json_string.size(),
@@ -482,8 +487,10 @@ class JsonReader {
 
     State state() const { return m_state; }
 
+    // NOTE:
     template <typename ValueT>
     void property(std::string_view name, ValueT& value) {
+        // SAFETY: If reader is in an incorrect state we return.
         if (m_state == State::Error || m_state == State::Done) {
             return;
         }
@@ -505,25 +512,39 @@ class JsonReader {
             return;
         }
 
-        if constexpr (IsSerializableT<JsonReader, ValueT>) {
-            if (!yyjson_is_obj(val)) {
-                m_state = State::Error;
-                return;
+        // ==== (1) Primitive ====
+        // NOTE: Bool is separated from standard integral types because yyjson treats
+        // differently.
+        if constexpr (std::is_same_v<ValueT, bool>) {
+            if (yyjson_is_bool(val)) {
+                value = yyjson_get_bool(val);
             }
-
-            m_stack.push_back(val);
-            m_arr_indices.push_back(0);
-
-            if constexpr (HasMemberSerializeT<JsonReader, ValueT>) {
-                value.serialize(*this);
+        } else if constexpr (std::is_integral_v<ValueT>) {
+            if constexpr (std::is_signed_v<ValueT>) {
+                if (yyjson_is_int(val)) {
+                    value = static_cast<ValueT>(yyjson_get_sint(val));
+                }
             } else {
-                serialize_global(*this, value);
+                if (yyjson_is_uint(val)) {
+                    value = static_cast<ValueT>(yyjson_get_uint(val));
+                }
             }
-
-            m_stack.pop_back();
-            m_arr_indices.pop_back();
-
-        } else if constexpr (IsIterableT<ValueT>) {
+        } else if constexpr (std::is_floating_point_v<ValueT>) {
+            if (yyjson_is_num(val)) {
+                value = static_cast<ValueT>(yyjson_get_num(val));
+            }
+        } else if constexpr (std::is_same_v<ValueT, std::string>) {
+            if (yyjson_is_str(val)) {
+                value.assign(yyjson_get_str(val), yyjson_get_len(val));
+            }
+        } else if constexpr (std::is_same_v<ValueT, std::string_view>) {
+            // WARNING: std::string_view will dangle if the JsonReader is destroyed.
+            if (yyjson_is_str(val)) {
+                value = std::string_view(yyjson_get_str(val), yyjson_get_len(val));
+            }
+        }
+        // ==== (2) Iterable ====
+        else if constexpr (impl::IsIterableT<ValueT>) {
             if (!yyjson_is_arr(val)) {
                 m_state = State::Error;
                 return;
@@ -546,41 +567,29 @@ class JsonReader {
 
             m_stack.pop_back();
             m_arr_indices.pop_back();
+        }
+        // ==== (3) Serializable ===
+        else if constexpr (IsSerializableT<JsonReader, ValueT>) {
+            if (!yyjson_is_obj(val)) {
+                m_state = State::Error;
+                return;
+            }
+
+            m_stack.push_back(val);
+            m_arr_indices.push_back(0);
+
+            if constexpr (HasMemberSerializeT<JsonReader, ValueT>) {
+                value.serialize(*this);
+            } else {
+                serialize_global(*this, value);
+            }
+
+            m_stack.pop_back();
+            m_arr_indices.pop_back();
 
         }
-
-        // NOTE: Bool is separated from standard integral types because yyjson treats
-        // bool differently than C++.
-        else if constexpr (std::is_same_v<ValueT, bool>) {
-            if (yyjson_is_bool(val)) {
-                value = yyjson_get_bool(val);
-            }
-        } else if constexpr (std::is_integral_v<ValueT>) {
-            if constexpr (std::is_signed_v<ValueT>) {
-                if (yyjson_is_int(val)) {
-                    value = static_cast<ValueT>(yyjson_get_sint(val));
-                }
-            } else {
-                if (yyjson_is_uint(val)) {
-                    value = static_cast<ValueT>(yyjson_get_uint(val));
-                } else if (yyjson_is_int(val)) {
-                    value = static_cast<ValueT>(yyjson_get_sint(val));
-                }
-            }
-        } else if constexpr (std::is_floating_point_v<ValueT>) {
-            if (yyjson_is_num(val)) {
-                value = static_cast<ValueT>(yyjson_get_num(val));
-            }
-        } else if constexpr (std::is_same_v<ValueT, std::string>) {
-            if (yyjson_is_str(val)) {
-                value.assign(yyjson_get_str(val), yyjson_get_len(val));
-            }
-        } else if constexpr (std::is_same_v<ValueT, std::string_view>) {
-            // WARNING: std::string_view will dangle if the JsonReader is destroyed.
-            if (yyjson_is_str(val)) {
-                value = std::string_view(yyjson_get_str(val), yyjson_get_len(val));
-            }
-        } else {
+        // ==== (4) Panic ===
+        else {
             static_assert(false, "JsonReader::ERROR - Unsupported type");
         }
     }
@@ -604,14 +613,14 @@ class JsonReader {
         if (!parent) return nullptr;
 
         if (yyjson_is_arr(parent)) {
-            // We are inside an array, ignore the name-less name, get by index
+            // We are inside an array, ignore the property name.
             USize& idx      = m_arr_indices.back();
             yyjson_val* val = yyjson_arr_get(parent, idx);
             ++idx;
 
             return val;
         } else if (yyjson_is_obj(parent)) {
-            // We are inside an object, get by name; key
+            // We are inside an object, get value by name.
             return yyjson_obj_getn(parent, name.data(), name.size());
         }
 
@@ -619,18 +628,17 @@ class JsonReader {
     }
 
    private:
-    // YYJSON
+    // ==== Json ====
     yyjson_doc* m_doc { nullptr };
     yyjson_val* m_root { nullptr };
 
-    // Stacks
-    // `m_stack` is for the nodes, like in JsonWriter.
+    // ==== Stacks ====
+    // For the nodes, like in JsonWriter.
     std::vector<yyjson_val*> m_stack {};
-    // `m_arr_indices` is to keep track of the array elements. It is much more managable
-    // this way.
+    // Used to keep track of the array indices currently being processed.
     std::vector<USize> m_arr_indices {};
 
-    // State
+    // ==== State ====
     State m_state { State::Init };
     const Options m_options;
 };

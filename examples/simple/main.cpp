@@ -54,7 +54,7 @@ struct State {
 };
 
 int main() {
-    ser::DebugStdoutWriter debug_stdout_writer({ .tab_width = 2, .print_types = false });
+    ser::DebugStdoutWriter debug_stdout_writer({ .tab_width = 4, .print_types = true });
 
     Position position_a { .x = 1.0f, .y = -1.0f, .z = 42.42f };
     Rotation rotation_a { .yawn = 1.0f, .pitch = 0.5f, .roll = 0.69f };
