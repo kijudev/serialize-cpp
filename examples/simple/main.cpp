@@ -21,12 +21,12 @@ struct Rotation {
     float pitch {};
     float roll {};
 
-    template <ser::IsArchiveT Archive>
-    void serialize(Archive& ar) {
-        ar.property("yawn", yawn);
-        ar.property("pitch", pitch);
-        ar.property("roll", roll);
-    }
+    // template <ser::IsArchiveT Archive>
+    // void serialize(Archive& ar) {
+    //     ar.property("yawn", yawn);
+    //     ar.property("pitch", pitch);
+    //     ar.property("roll", roll);
+    // }
 };
 
 struct Transform {
